@@ -1,0 +1,64 @@
+name: Evrensel Guvenlik Fabrikasi 🏭
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build-scan-sign:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      # 1. Kodları Çek
+      - name: Kodlari Cek
+        uses: actions/checkout@v4
+
+      # 2. Araçları Kur (Bunlar her dil için aynıdır)
+      - name: Cosign Kur
+        uses: sigstore/cosign-installer@v3.3.0
+
+      - name: Syft Kur
+        uses: anchore/sbom-action/download-syft@v0.15.0
+
+      # 3. İmaj İsmini Otomatik Belirle (SİHİRLİ KISIM ✨)
+      # Proje ismini alıp küçük harfe çeviriyoruz (Docker büyük harf sevmez)
+      - name: Imaj Ismini Belirle
+        id: image_name
+        run: |
+          echo "IMAGE=ttl.sh/${{ github.event.repository.name }}:${{ github.sha }}" >> $GITHUB_ENV
+
+      # 4. Minimal İmaj Oluştur (Dili Dockerfile belirler, biz karışmayız)
+      - name: Docker Build
+        run: docker build -t ${{ env.IMAGE }} .
+
+      # 5. SBOM Oluştur
+      - name: SBOM Olustur
+        run: syft ${{ env.IMAGE }} -o spdx-json > sbom.json
+
+      # 6. Kanıtı Kaydet
+      - name: SBOM Dosyasını Yükle
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.event.repository.name }}
+          path: sbom.json
+
+      # 7. İmajı Gönder
+      - name: Push
+        run: docker push ${{ env.IMAGE }}
+
+      # 8. İmzala
+      - name: Sign
+        run: |
+          cosign sign --yes --key env://COSIGN_PRIVATE_KEY ${{ env.IMAGE }}
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+
+      # 9. Doğrula
+      - name: Verify
+        run: |
+           cosign verify --key cosign.pub ${{ env.IMAGE }}
